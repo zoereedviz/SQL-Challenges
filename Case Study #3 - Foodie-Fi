@@ -10,11 +10,13 @@ INNER JOIN subscriptions AS S on P.plan_id = S.plan_id
 WHERE s.customer_id IN (1, 2, 11, 13, 15, 16, 18, 19)
 ORDER BY s.customer_id ASC, s.start_date ASC;
 
+
 -- B) Data analysis questions --
 
 -- 1. How many customers has Foodie-Fi ever had?
 SELECT COUNT( DISTINCT customer_id)
 FROM subscriptions;
+
 
 -- 2. What is the monthly distribution of trial plan start_date values for our dataset - use the start of the month as the group by value
 SELECT month(s.start_date) as month,
@@ -24,6 +26,7 @@ INNER JOIN subscriptions AS S on P.plan_id = S.plan_id
 WHERE p.plan_id = 0
 GROUP BY month(s.start_date);
 
+
 -- 3. What plan start_date values occur after the year 2020 for our dataset? Show the breakdown by count of events for each plan_name
 SELECT p.plan_name,
 COUNT(p.plan_id) AS no_of_plans_started
@@ -32,11 +35,13 @@ INNER JOIN subscriptions AS S ON P.plan_id = S.plan_id
 WHERE year(s.start_date)>2020
 GROUP BY p.plan_name;
 
+
 -- 4. What is the customer count and percentage of customers who have churned rounded to 1 decimal place?
 SELECT (SELECT COUNT(DISTINCT customer_id) FROM subscriptions) AS customers_count,
 ROUND(((SELECT COUNT(DISTINCT customer_id) FROM subscriptions WHERE plan_id=4)/(SELECT COUNT(DISTINCT customer_id) FROM subscriptions)*100 ),1) AS churned_customers_percent
 FROM subscriptions
 LIMIT 1;
+
 
 -- 5. How many customers have churned straight after their initial free trial - what percentage is this rounded to the nearest whole number?
 WITH row_number_cte AS (
@@ -52,9 +57,128 @@ ROUND((COUNT(DISTINCT customer_id)/(SELECT COUNT(DISTINCT customer_id) FROM subs
 FROM row_number_cte
 WHERE row_number=2 AND plan_name = 'churn';
 
--- What is the number and percentage of customer plans after their initial free trial?
--- What is the customer count and percentage breakdown of all 5 plan_name values at 2020-12-31?
--- How many customers have upgraded to an annual plan in 2020?
--- How many days on average does it take for a customer to an annual plan from the day they join Foodie-Fi?
--- Can you further breakdown this average value into 30 day periods (i.e. 0-30 days, 31-60 days etc)
--- How many customers downgraded from a pro monthly to a basic monthly plan in 2020?
+
+-- 6. What is the number and percentage of customer plans after their initial free trial?
+WITH row_number_cte AS 
+    (SELECT p.plan_name,
+    s.customer_id,
+    p.plan_id,
+    ROW_NUMBER() OVER(PARTITION BY s.customer_id ORDER BY s.start_date ASC) AS row_number
+    FROM plans AS P
+    INNER JOIN subscriptions AS S ON P.plan_id = S.plan_id
+    ORDER BY s.customer_id, s.start_date)
+SELECT plan_name,
+COUNT(customer_id) AS no_of_customers,
+ROUND(((COUNT(customer_id)/(SELECT COUNT(DISTINCT customer_id) FROM row_number_cte))*100), 2) AS customer_percent
+FROM row_number_cte
+WHERE row_number =2
+GROUP BY plan_id, plan_name;
+
+
+-- 7. What is the customer count and percentage breakdown of all 5 plan_name values at 2020-12-31?
+WITH pre_2021_cte AS
+    (SELECT *,
+    ROW_NUMBER() OVER(PARTITION BY customer_id ORDER BY start_date DESC ) AS row_no
+    FROM subscriptions AS S 
+    INNER JOIN plans AS P ON P.plan_id = S.plan_id
+    WHERE start_date < '2021-01-01'
+    ORDER BY customer_id ASC, start_date DESC)
+SELECT plan_name,
+COUNT(DISTINCT customer_id) AS customer_count,
+(SELECT COUNT(DISTINCT customer_id) FROM pre_2021_cte WHERE row_no=1) AS all_customers_count,
+ROUND ((((COUNT(DISTINCT customer_id))/(SELECT COUNT(DISTINCT customer_id) FROM pre_2021_cte WHERE row_no=1))*100), 1) AS percent
+FROM pre_2021_cte
+WHERE row_no = 1
+GROUP BY plan_name;
+
+
+-- 8. How many customers have upgraded to an annual plan in 2020?
+SELECT COUNT( DISTINCT customer_id) AS upgrades
+FROM subscriptions AS S
+INNER JOIN plans AS P ON S.plan_id=P.plan_id
+WHERE plan_name = 'pro annual' AND YEAR(start_date)='2020' ;
+
+
+-- 9. How many days on average does it take for a customer to an annual plan from the day they join Foodie--Fi?
+WITH trial_cte AS
+    (SELECT customer_id AS customer_id_trial, 
+    plan_id AS plan_id_trial, 
+    start_date AS start_date_trial
+    FROM subscriptions
+    WHERE plan_id=0)
+    ,
+    annual_cte AS
+        (SELECT customer_id AS customer_id_annual,
+        plan_id AS plan_id_annual, 
+        start_date AS start_date_annual
+        FROM subscriptions
+        WHERE plan_id=3)
+SELECT 
+ROUND((AVG(DATEDIFF(day, start_date_trial, start_date_annual))),0) AS average_days_to_upgrade
+FROM trial_cte AS T
+INNER JOIN annual_cte AS A on T.customer_id_trial=A.customer_id_annual;
+
+
+-- 10. Can you further breakdown this average value into 30 day periods (i.e. 0-30 days, 31-60 days etc)
+WITH trial_cte AS
+    (SELECT customer_id AS customer_id_trial, 
+    plan_id AS plan_id_trial, 
+    start_date AS start_date_trial
+    FROM subscriptions
+    WHERE plan_id=0)
+    ,
+    annual_cte AS
+        (SELECT customer_id AS customer_id_annual,
+        plan_id AS plan_id_annual, 
+        start_date AS start_date_annual
+        FROM subscriptions
+        WHERE plan_id=3)
+SELECT 
+CASE
+ WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 30 THEN '0-30'
+ WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 60 THEN '31-60'
+ WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 90 THEN '61-90'
+ WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 120 THEN '91-120'
+ WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 150 THEN '121-150'
+ WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 180 THEN '151-180'
+ WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 210 THEN '181-210'
+ ELSE '>210'
+ END AS period,
+COUNT(DISTINCT customer_id_trial) AS customer_count
+FROM trial_cte AS T
+INNER JOIN annual_cte AS A on T.customer_id_trial=A.customer_id_annual
+GROUP BY (
+CASE
+WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 30 THEN '0-30'
+WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 60 THEN '31-60'
+WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 90 THEN '61-90'
+WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 120 THEN '91-120'
+WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 150 THEN '121-150'
+WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 180 THEN '151-180'
+WHEN DATEDIFF(day, start_date_trial, start_date_annual) <= 210 THEN '181-210'
+ELSE '>210'
+END
+);
+
+
+-- 11. How many customers downgraded from a pro monthly to a basic monthly plan in 2020?
+WITH basic_cte AS
+    (
+    SELECT customer_id AS customer_id_basic,
+    start_date AS start_date_basic
+    FROM subscriptions
+    WHERE YEAR(start_date)=2020 AND plan_id=1)
+    ,
+    pro_cte AS
+    (
+    SELECT customer_id AS customer_id_pro,
+    start_date AS start_date_pro
+    FROM subscriptions
+    WHERE start_date<= '2020-12-31' AND plan_id=2)
+SELECT 
+SUM (CASE
+    WHEN start_date_basic > start_date_pro THEN 1
+    ELSE 0
+    END) AS customers_who_downgraded
+FROM basic_cte
+INNER JOIN pro_cte ON customer_id_basic = customer_id_pro;
